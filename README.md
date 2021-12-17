@@ -57,12 +57,12 @@ $ sudo dkms remove snd-usb-zoom/0.0.1
 
 ## USB format:
 
-URB = 512 Byte
-1 CH = 4 Byte (32 Bit)
+- URB = 512 Byte
+- 1 CH = 4 Byte (32 Bit)
 
-(ML)(MR)(In1)(In2)... (128 Byte) (32 possible Channels, L-8 uses 12 CH, see Input)
-(ML)(MR)(In1)(In2)... (128 Byte)
-(ML)(MR)(In1)(In2)... (128 Byte)
-(ML)(MR)(In1)(In2)... (128 Byte)
+- (ML)(MR)(In1)(In2)... (128 Byte) (32 possible Channels (needs padding), L-8 uses 12 CH, see Input)
+- (ML)(MR)(In1)(In2)... (128 Byte)
+- (ML)(MR)(In1)(In2)... (128 Byte)
+- (ML)(MR)(In1)(In2)... (128 Byte)
 
 1 URB = 1/48000 * 4 Samples = 83us/URB
