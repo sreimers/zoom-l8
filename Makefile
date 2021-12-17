@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 snd-usb-zoom-objs := driver.o pcm.o
+#snd-usb-zoom-objs := test.o
 obj-$(CONFIG_SND_USB_AUDIO) += snd-usb-zoom.o
 
 .PHONY: build

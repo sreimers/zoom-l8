@@ -88,10 +88,30 @@ static int zoom_chip_probe(struct usb_interface *intf,
 	int i;
 	struct zoom_chip *chip;
 	struct usb_device *device = interface_to_usbdev(intf);
+	u8 buffer[32]; //@TODO FIX buffer size!!!
 
-	ret = usb_set_interface(device, 0, 0);
+	dev_info(&device->dev, "zoom chip probe\n");
+#if 0
+	/* Initialize device / @TODO verify samplerate */
+	ret = usb_control_msg_recv(device, 0, 1, 0xa1, 256, 10240,
+			buffer, 32, 1000, GFP_KERNEL);
+	dev_info(&device->dev, "zoom chip CT1: %d\n", ret);
+	ret = usb_control_msg_recv(device, 0, 2, 0xa1, 256, 10240,
+			buffer, 256, 1000, GFP_KERNEL);
+	dev_info(&device->dev, "zoom chip CT2: %d\n", ret);
+#endif
+
+	ret = usb_set_interface(device, 1, 3); /* ALT=1 EP1 OUT 32 bit */
 	if (ret != 0) {
-		dev_err(&device->dev, "can't set first interface for " CARD_NAME " device.\n");
+		dev_err(&device->dev,
+			"can't set first interface for " CARD_NAME " device.\n");
+		return -EIO;
+	}
+
+	ret = usb_set_interface(device, 2, 3); /* ALT=2 EP2 IN 32 bit */
+	if (ret != 0) {
+		dev_err(&device->dev,
+			"can't set second interface for " CARD_NAME " device.\n");
 		return -EIO;
 	}
 
@@ -110,12 +130,16 @@ static int zoom_chip_probe(struct usb_interface *intf,
 	}
 
 	ret = zoom_chip_create(intf, device, i, quirk, &chip);
-	if (ret < 0)
+	if (ret < 0) {
+		dev_err(&device->dev, "zoom_chip_create\n");
 		goto err;
+	}
 
 	ret = zoom_pcm_init(chip, 0);
-	if (ret < 0)
+	if (ret < 0) {
+		dev_err(&device->dev, "zoom_pcm_init\n");
 		goto err_chip_destroy;
+	}
 
 	ret = snd_card_register(chip->card);
 	if (ret < 0) {
@@ -155,7 +179,7 @@ static void zoom_chip_disconnect(struct usb_interface *intf)
 
 static const struct usb_device_id device_table[] = {
 	{
-		USB_DEVICE(0x1686, 0x0525),
+		USB_DEVICE_INTERFACE_NUMBER(0x1686, 0x0525, 2),
 		.driver_info = (unsigned long)&(const struct zoom_vendor_quirk) {
 			.device_name = "ZOOM L-8"
 		}

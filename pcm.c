@@ -14,9 +14,10 @@
 #include "pcm.h"
 #include "driver.h"
 
-#define OUT_EP          0x2
-#define PCM_N_URBS      8
-#define PCM_PACKET_SIZE 4096
+#define IN_EP           0x82
+#define OUT_EP          0x01
+#define PCM_N_URBS      4
+#define PCM_PACKET_SIZE 512 
 #define PCM_BUFFER_SIZE (2 * PCM_N_URBS * PCM_PACKET_SIZE)
 
 struct pcm_urb {
@@ -51,6 +52,7 @@ struct pcm_runtime {
 	bool panic; /* if set driver won't do anymore pcm on device */
 
 	struct pcm_urb out_urbs[PCM_N_URBS];
+	struct pcm_urb in_urbs[PCM_N_URBS];
 
 	struct mutex stream_mutex;
 	u8 stream_state; /* one of STREAM_XXX */
@@ -59,8 +61,7 @@ struct pcm_runtime {
 	bool stream_wait_cond;
 };
 
-static const unsigned int rates[] = { 44100, 48000, 88200, 96000, 176400, 192000,
-				      352800, 384000 };
+static const unsigned int rates[] = { 48000 };
 static const struct snd_pcm_hw_constraint_list constraints_extra_rates = {
 	.count = ARRAY_SIZE(rates),
 	.list = rates,
@@ -77,15 +78,9 @@ static const struct snd_pcm_hardware pcm_hw = {
 
 	.formats = SNDRV_PCM_FMTBIT_S32_LE,
 
-	.rates = SNDRV_PCM_RATE_44100 |
-		SNDRV_PCM_RATE_48000 |
-		SNDRV_PCM_RATE_88200 |
-		SNDRV_PCM_RATE_96000 |
-		SNDRV_PCM_RATE_176400 |
-		SNDRV_PCM_RATE_192000,
-
-	.rate_min = 44100,
-	.rate_max = 192000, /* changes in zoom_pcm_open to support extra rates */
+	.rates = SNDRV_PCM_RATE_48000,
+	.rate_min = 48000,
+	.rate_max = 48000,
 	.channels_min = 2,
 	.channels_max = 2,
 	.buffer_bytes_max = PCM_BUFFER_SIZE,
@@ -94,75 +89,6 @@ static const struct snd_pcm_hardware pcm_hw = {
 	.periods_min = 2,
 	.periods_max = 1024
 };
-
-/* message values used to change the sample rate */
-#define ZOOM_SET_RATE_REQUEST 0xb0
-
-#define ZOOM_RATE_44100  0x43
-#define ZOOM_RATE_48000  0x4b
-#define ZOOM_RATE_88200  0x42
-#define ZOOM_RATE_96000  0x4a
-#define ZOOM_RATE_176400 0x40
-#define ZOOM_RATE_192000 0x48
-#define ZOOM_RATE_352800 0x58
-#define ZOOM_RATE_384000 0x68
-
-static int zoom_pcm_set_rate(struct pcm_runtime *rt, unsigned int rate)
-{
-	struct usb_device *device = rt->chip->dev;
-	u16 rate_value;
-	int ret;
-
-	/* We are already sure that the rate is supported here thanks to
-	 * ALSA constraints
-	 */
-	switch (rate) {
-	case 44100:
-		rate_value = ZOOM_RATE_44100;
-		break;
-	case 48000:
-		rate_value = ZOOM_RATE_48000;
-		break;
-	case 88200:
-		rate_value = ZOOM_RATE_88200;
-		break;
-	case 96000:
-		rate_value = ZOOM_RATE_96000;
-		break;
-	case 176400:
-		rate_value = ZOOM_RATE_176400;
-		break;
-	case 192000:
-		rate_value = ZOOM_RATE_192000;
-		break;
-	case 352800:
-		rate_value = ZOOM_RATE_352800;
-		break;
-	case 384000:
-		rate_value = ZOOM_RATE_384000;
-		break;
-	default:
-		dev_err(&device->dev, "Unsupported rate %d\n", rate);
-		return -EINVAL;
-	}
-
-	/*
-	 * USBIO: Vendor 0xb0(wValue=0x0043, wIndex=0x0000)
-	 * 43 b0 43 00 00 00 00 00
-	 * USBIO: Vendor 0xb0(wValue=0x004b, wIndex=0x0000)
-	 * 43 b0 4b 00 00 00 00 00
-	 * This control message doesn't have any ack from the
-	 * other side
-	 */
-	ret = usb_control_msg_send(device, 0,
-				   ZOOM_SET_RATE_REQUEST,
-				   USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_OTHER,
-				   rate_value, 0, NULL, 0, 100, GFP_KERNEL);
-	if (ret)
-		dev_err(&device->dev, "Error setting samplerate %d.\n", rate);
-
-	return ret;
-}
 
 static struct pcm_substream *zoom_pcm_get_substream(struct snd_pcm_substream
 						      *alsa_sub)
@@ -194,6 +120,15 @@ static void zoom_pcm_stream_stop(struct pcm_runtime *rt)
 			usb_kill_urb(&rt->out_urbs[i].instance);
 		}
 
+		for (i = 0; i < PCM_N_URBS; i++) {
+			time = usb_wait_anchor_empty_timeout(
+					&rt->in_urbs[i].submitted, 100);
+			if (!time)
+				usb_kill_anchored_urbs(
+					&rt->in_urbs[i].submitted);
+			usb_kill_urb(&rt->in_urbs[i].instance);
+		}
+
 		rt->stream_state = STREAM_DISABLED;
 	}
 }
@@ -221,6 +156,15 @@ static int zoom_pcm_stream_start(struct pcm_runtime *rt)
 				zoom_pcm_stream_stop(rt);
 				return ret;
 			}
+
+			usb_anchor_urb(&rt->in_urbs[i].instance,
+				       &rt->in_urbs[i].submitted);
+			ret = usb_submit_urb(&rt->in_urbs[i].instance,
+					     GFP_ATOMIC);
+			if (ret) {
+				zoom_pcm_stream_stop(rt);
+				return ret;
+			}
 		}
 
 		/* wait for first out urb to return (sent in in urb handler) */
@@ -228,7 +172,7 @@ static int zoom_pcm_stream_start(struct pcm_runtime *rt)
 				   HZ);
 		if (rt->stream_wait_cond) {
 			struct device *device = &rt->chip->dev->dev;
-			dev_dbg(device, "%s: Stream is running wakeup event\n",
+			dev_info(device, "%s: Stream is running wakeup event\n",
 				 __func__);
 			rt->stream_state = STREAM_RUNNING;
 		} else {
@@ -297,6 +241,13 @@ static bool zoom_pcm_playback(struct pcm_substream *sub, struct pcm_urb *urb)
 	return false;
 }
 
+static void zoom_pcm_in_urb_handler(struct urb *usb_urb)
+{
+	struct pcm_urb *in_urb = usb_urb->context;
+
+	usb_submit_urb(&in_urb->instance, GFP_ATOMIC);
+}
+	
 static void zoom_pcm_out_urb_handler(struct urb *usb_urb)
 {
 	struct pcm_urb *out_urb = usb_urb->context;
@@ -324,8 +275,10 @@ static void zoom_pcm_out_urb_handler(struct urb *usb_urb)
 	/* now send our playback data (if a free out urb was found) */
 	sub = &rt->playback;
 	spin_lock_irqsave(&sub->lock, flags);
-	if (sub->active)
+
+	if (sub->active) {
 		do_period_elapsed = zoom_pcm_playback(sub, out_urb);
+	}
 	else
 		memset(out_urb->buffer, 0, PCM_PACKET_SIZE);
 
@@ -415,7 +368,6 @@ static int zoom_pcm_prepare(struct snd_pcm_substream *alsa_sub)
 {
 	struct pcm_runtime *rt = snd_pcm_substream_chip(alsa_sub);
 	struct pcm_substream *sub = zoom_pcm_get_substream(alsa_sub);
-	struct snd_pcm_runtime *alsa_rt = alsa_sub->runtime;
 	int ret;
 
 	if (rt->panic)
@@ -432,11 +384,6 @@ static int zoom_pcm_prepare(struct snd_pcm_substream *alsa_sub)
 
 	if (rt->stream_state == STREAM_DISABLED) {
 
-		ret = zoom_pcm_set_rate(rt, alsa_rt->rate);
-		if (ret) {
-			mutex_unlock(&rt->stream_mutex);
-			return ret;
-		}
 		ret = zoom_pcm_stream_start(rt);
 		if (ret) {
 			mutex_unlock(&rt->stream_mutex);
@@ -501,7 +448,7 @@ static const struct snd_pcm_ops pcm_ops = {
 	.pointer = zoom_pcm_pointer,
 };
 
-static int zoom_pcm_init_urb(struct pcm_urb *urb,
+static int zoom_pcm_init_urb_out(struct pcm_urb *urb,
 			       struct zoom_chip *chip,
 			       unsigned int ep,
 			       void (*handler)(struct urb *))
@@ -515,6 +462,28 @@ static int zoom_pcm_init_urb(struct pcm_urb *urb,
 
 	usb_fill_bulk_urb(&urb->instance, chip->dev,
 			  usb_sndbulkpipe(chip->dev, ep), (void *)urb->buffer,
+			  PCM_PACKET_SIZE, handler, urb);
+	if (usb_urb_ep_type_check(&urb->instance))
+		return -EINVAL;
+	init_usb_anchor(&urb->submitted);
+
+	return 0;
+}
+
+static int zoom_pcm_init_urb_in(struct pcm_urb *urb,
+			       struct zoom_chip *chip,
+			       unsigned int ep,
+			       void (*handler)(struct urb *))
+{
+	urb->chip = chip;
+	usb_init_urb(&urb->instance);
+
+	urb->buffer = kzalloc(PCM_PACKET_SIZE, GFP_KERNEL);
+	if (!urb->buffer)
+		return -ENOMEM;
+
+	usb_fill_bulk_urb(&urb->instance, chip->dev,
+			  usb_rcvbulkpipe(chip->dev, ep), (void *)urb->buffer,
 			  PCM_PACKET_SIZE, handler, urb);
 	if (usb_urb_ep_type_check(&urb->instance))
 		return -EINVAL;
@@ -541,8 +510,10 @@ static void zoom_pcm_destroy(struct zoom_chip *chip)
 	struct pcm_runtime *rt = chip->pcm;
 	int i;
 
-	for (i = 0; i < PCM_N_URBS; i++)
+	for (i = 0; i < PCM_N_URBS; i++) {
 		kfree(rt->out_urbs[i].buffer);
+		kfree(rt->in_urbs[i].buffer);
+	}
 
 	kfree(chip->pcm);
 	chip->pcm = NULL;
@@ -577,10 +548,21 @@ int zoom_pcm_init(struct zoom_chip *chip, u8 extra_freq)
 	spin_lock_init(&rt->playback.lock);
 
 	for (i = 0; i < PCM_N_URBS; i++) {
-		ret = zoom_pcm_init_urb(&rt->out_urbs[i], chip, OUT_EP,
+		ret = zoom_pcm_init_urb_out(&rt->out_urbs[i], chip, OUT_EP,
 				    zoom_pcm_out_urb_handler);
-		if (ret < 0)
+		if (ret < 0) {
+			printk("zoom_pcm_init_urb_out\n");
 			goto error;
+		}
+	}
+
+	for (i = 0; i < PCM_N_URBS; i++) {
+		ret = zoom_pcm_init_urb_in(&rt->in_urbs[i], chip, IN_EP,
+				    zoom_pcm_in_urb_handler);
+		if (ret < 0) {
+			printk("zoom_pcm_init_urb_in\n");
+			goto error;
+		}
 	}
 
 	ret = snd_pcm_new(chip->card, "USB Audio", 0, 1, 0, &pcm);
@@ -605,6 +587,8 @@ int zoom_pcm_init(struct zoom_chip *chip, u8 extra_freq)
 error:
 	for (i = 0; i < PCM_N_URBS; i++)
 		kfree(rt->out_urbs[i].buffer);
+	for (i = 0; i < PCM_N_URBS; i++)
+		kfree(rt->in_urbs[i].buffer);
 	kfree(rt);
 	return ret;
 }
