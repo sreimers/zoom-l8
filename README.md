@@ -1,18 +1,22 @@
 # Requirements - Arch Linux
-
+```bash
 $ sudo pacman -S git make gcc linux-headers dkms
-
+```
 
 # Requirements - Ubuntu
 
+```bash
 $ sudo apt-get install build-essential dkms git
+```
 
 
 # Installation
 
+```bash
 $ sudo git clone https://github.com/sreimers/zoom-l8.git /usr/src/snd-usb-zoom-0.0.1
 $ sudo dkms add snd-usb-zoom/0.0.1
 $ sudo dkms autoinstall
+```
 
 # Update
 
@@ -21,7 +25,9 @@ TBD
 
 # Remove
 
+```bash
 $ sudo dkms remove snd-usb-zoom/0.0.1
+```
 
 
 # Notes
