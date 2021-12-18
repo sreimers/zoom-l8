@@ -97,23 +97,9 @@ static int zoom_chip_probe(struct usb_interface *intf,
 			buffer, 32, 1000, GFP_KERNEL);
 	dev_info(&device->dev, "zoom chip CT1: %d\n", ret);
 	ret = usb_control_msg_recv(device, 0, 2, 0xa1, 256, 10240,
-			buffer, 256, 1000, GFP_KERNEL);
+			buffer, 32, 1000, GFP_KERNEL);
 	dev_info(&device->dev, "zoom chip CT2: %d\n", ret);
 #endif
-
-	ret = usb_set_interface(device, 1, 3); /* ALT=1 EP1 OUT 32 bit */
-	if (ret != 0) {
-		dev_err(&device->dev,
-			"can't set first interface for " CARD_NAME " device.\n");
-		return -EIO;
-	}
-
-	ret = usb_set_interface(device, 2, 3); /* ALT=2 EP2 IN 32 bit */
-	if (ret != 0) {
-		dev_err(&device->dev,
-			"can't set second interface for " CARD_NAME " device.\n");
-		return -EIO;
-	}
 
 	/* check whether the card is already registered */
 	chip = NULL;

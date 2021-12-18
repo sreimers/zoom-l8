@@ -17,7 +17,7 @@
 #define IN_EP           0x82
 #define OUT_EP          0x01
 #define PCM_N_URBS      4
-#define PCM_PACKET_SIZE 512 
+#define PCM_PACKET_SIZE 512
 #define PCM_BUFFER_SIZE (2 * PCM_N_URBS * PCM_PACKET_SIZE)
 
 struct pcm_urb {
@@ -144,6 +144,22 @@ static int zoom_pcm_stream_start(struct pcm_runtime *rt)
 		/* reset panic state when starting a new stream */
 		rt->panic = false;
 
+		ret = usb_set_interface(rt->chip->dev, 1, 3); /* ALT=1 EP1 OUT 32 bit */
+		if (ret != 0) {
+			zoom_pcm_stream_stop(rt);
+			dev_err(&rt->chip->dev->dev,
+					"can't set first interface for device.\n");
+			return -EIO;
+		}
+
+		ret = usb_set_interface(rt->chip->dev, 2, 3); /* ALT=2 EP2 IN 32 bit */
+		if (ret != 0) {
+			zoom_pcm_stream_stop(rt);
+			dev_err(&rt->chip->dev->dev,
+					"can't set second interface for device.\n");
+			return -EIO;
+		}
+
 		/* submit our out urbs zero init */
 		rt->stream_state = STREAM_STARTING;
 		for (i = 0; i < PCM_N_URBS; i++) {
@@ -183,13 +199,20 @@ static int zoom_pcm_stream_start(struct pcm_runtime *rt)
 	return ret;
 }
 
-/* The hardware wants word-swapped 32-bit values */
+/* The hardware wants 4x32ch (512 byte) values */
 static void memcpy_swahw32(u8 *dest, u8 *src, unsigned int n)
 {
-	unsigned int i;
+	unsigned int i, o = 0;
 
-	for (i = 0; i < n / 4; i++)
-		((u32 *)dest)[i] = swahw32(((u32 *)src)[i]);
+	for (i = 0; i < (PCM_PACKET_SIZE/4); i++) {
+		if (i % 32)
+			((u32 *)dest)[i] = 0;
+		else {
+			//2ch
+			((u32 *)dest)[i] = ((u32 *)src)[o++];
+			((u32 *)dest)[++i] = ((u32 *)src)[o++];
+		}
+	}
 }
 
 /* call with substream locked */
@@ -199,24 +222,26 @@ static bool zoom_pcm_playback(struct pcm_substream *sub, struct pcm_urb *urb)
 	struct snd_pcm_runtime *alsa_rt = sub->instance->runtime;
 	struct device *device = &urb->chip->dev->dev;
 	u8 *source;
-	unsigned int pcm_buffer_size;
+	unsigned int pcm_buffer_size, pcm_len;
 
 	WARN_ON(alsa_rt->format != SNDRV_PCM_FORMAT_S32_LE);
 
 	pcm_buffer_size = snd_pcm_lib_buffer_bytes(sub->instance);
 
-	if (sub->dma_off + PCM_PACKET_SIZE <= pcm_buffer_size) {
+	pcm_len = 4 * 2 * 4; /* 4 Byte (32Bit) * 2 CH * 4 Frames */
+
+	if (sub->dma_off + pcm_len <= pcm_buffer_size) {
 		dev_dbg(device, "%s: (1) buffer_size %#x dma_offset %#x\n", __func__,
 			 (unsigned int) pcm_buffer_size,
 			 (unsigned int) sub->dma_off);
 
 		source = alsa_rt->dma_area + sub->dma_off;
-		memcpy_swahw32(urb->buffer, source, PCM_PACKET_SIZE);
+		memcpy_swahw32(urb->buffer, source, pcm_len);
 	} else {
 		/* wrap around at end of ring buffer */
 		unsigned int len;
 
-		dev_dbg(device, "%s: (2) buffer_size %#x dma_offset %#x\n", __func__,
+		dev_info(device, "%s: (2) buffer_size %#x dma_offset %#x\n", __func__,
 			 (unsigned int) pcm_buffer_size,
 			 (unsigned int) sub->dma_off);
 
@@ -227,13 +252,13 @@ static bool zoom_pcm_playback(struct pcm_substream *sub, struct pcm_urb *urb)
 
 		source = alsa_rt->dma_area;
 		memcpy_swahw32(urb->buffer + len, source,
-			       PCM_PACKET_SIZE - len);
+			       pcm_len - len);
 	}
-	sub->dma_off += PCM_PACKET_SIZE;
+	sub->dma_off += pcm_len;
 	if (sub->dma_off >= pcm_buffer_size)
 		sub->dma_off -= pcm_buffer_size;
 
-	sub->period_off += PCM_PACKET_SIZE;
+	sub->period_off += pcm_len;
 	if (sub->period_off >= alsa_rt->period_size) {
 		sub->period_off %= alsa_rt->period_size;
 		return true;
