@@ -121,7 +121,7 @@ static int zoom_chip_probe(struct usb_interface *intf,
 		goto err;
 	}
 
-	ret = zoom_pcm_init(chip, 0);
+	ret = zoom_pcm_init(chip);
 	if (ret < 0) {
 		dev_err(&device->dev, "zoom_pcm_init\n");
 		goto err_chip_destroy;
