@@ -133,6 +133,29 @@ static void zoom_pcm_stream_stop(struct pcm_runtime *rt)
 	}
 }
 
+static int zoom_interface_init(struct pcm_runtime *rt)
+{
+	int ret = 0;
+
+	ret = usb_set_interface(rt->chip->dev, 1, 3); /* ALT=1 EP1 OUT 32 bit */
+	if (ret != 0) {
+		zoom_pcm_stream_stop(rt);
+		dev_err(&rt->chip->dev->dev,
+				"can't set first interface for device.\n");
+		return -EIO;
+	}
+
+	ret = usb_set_interface(rt->chip->dev, 2, 3); /* ALT=2 EP2 IN 32 bit */
+	if (ret != 0) {
+		zoom_pcm_stream_stop(rt);
+		dev_err(&rt->chip->dev->dev,
+				"can't set second interface for device.\n");
+		return -EIO;
+	}
+
+	return 0;
+}
+
 /* call with stream_mutex locked */
 static int zoom_pcm_stream_start(struct pcm_runtime *rt)
 {
@@ -143,22 +166,12 @@ static int zoom_pcm_stream_start(struct pcm_runtime *rt)
 
 		/* reset panic state when starting a new stream */
 		rt->panic = false;
-
-		ret = usb_set_interface(rt->chip->dev, 1, 3); /* ALT=1 EP1 OUT 32 bit */
-		if (ret != 0) {
-			zoom_pcm_stream_stop(rt);
-			dev_err(&rt->chip->dev->dev,
-					"can't set first interface for device.\n");
-			return -EIO;
-		}
-
-		ret = usb_set_interface(rt->chip->dev, 2, 3); /* ALT=2 EP2 IN 32 bit */
-		if (ret != 0) {
-			zoom_pcm_stream_stop(rt);
-			dev_err(&rt->chip->dev->dev,
-					"can't set second interface for device.\n");
-			return -EIO;
-		}
+		
+		/* the device is rather forgetful, after some time without
+		 * URBs the device fallbacks to 16bit mode */
+		ret = zoom_interface_init(rt);
+		if (ret)
+			return ret;
 
 		/* submit our out urbs zero init */
 		rt->stream_state = STREAM_STARTING;
@@ -571,6 +584,10 @@ int zoom_pcm_init(struct zoom_chip *chip, u8 extra_freq)
 	init_waitqueue_head(&rt->stream_wait_queue);
 	mutex_init(&rt->stream_mutex);
 	spin_lock_init(&rt->playback.lock);
+
+	ret = zoom_interface_init(rt);
+	if (ret)
+		return ret;
 
 	for (i = 0; i < PCM_N_URBS; i++) {
 		ret = zoom_pcm_init_urb_out(&rt->out_urbs[i], chip, OUT_EP,
