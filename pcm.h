@@ -13,6 +13,6 @@
 
 struct zoom_chip;
 
-int zoom_pcm_init(struct zoom_chip *chip, u8 extra_freq);
+int zoom_pcm_init(struct zoom_chip *chip);
 void zoom_pcm_abort(struct zoom_chip *chip);
 #endif /* ZOOM_PCM_H */
