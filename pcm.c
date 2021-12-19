@@ -57,7 +57,6 @@ struct pcm_runtime {
 
 	struct mutex stream_mutex;
 	u8 stream_state; /* one of STREAM_XXX */
-	u8 extra_freq;
 	wait_queue_head_t stream_wait_queue;
 	bool stream_wait_cond;
 };
@@ -238,22 +237,8 @@ static int zoom_pcm_stream_start(struct pcm_runtime *rt)
 	return ret;
 }
 
-static void memcpy_pcm_write(u8 *dest, u8 *src, u8 ch)
-{
-	unsigned int i, c, o = 0;
-
-	for (i = 0; i < (PCM_PACKET_SIZE/4); i++) {
-		if (i % 32)
-			continue;
-
-		for (c = 0; c < ch; c++) {
-			((u32 *)dest)[o++] = ((u32 *)src)[i++];
-		}
-	}
-}
-
 /* The hardware wants 4x32ch (512 byte) values */
-static void memcpy_pcm_read(u8 *dest, u8 *src, u8 ch)
+static void memcpy_pcm_playback(u8 *dest, u8 *src, u8 ch)
 {
 	unsigned int i, c, o = 0;
 
@@ -269,6 +254,27 @@ static void memcpy_pcm_read(u8 *dest, u8 *src, u8 ch)
 	}
 }
 
+static void memcpy_pcm_capture(u8 *dest, u8 *src, u8 ch, unsigned int skip, unsigned int l)
+{
+	unsigned int i, c, o = 0;
+
+	for (i = 0; i < (PCM_PACKET_SIZE/4); i++) {
+		if (i % 32)
+			continue;
+
+		for (c = 0; c < ch; c++) {
+			if (skip && i < skip/4) {
+				i++;
+				continue;
+			}
+			if (l && o >= l/4)
+				return;
+
+			((u32 *)dest)[o++] = ((u32 *)src)[i++];
+		}
+	}
+}
+
 /* call with substream locked */
 /* returns true if a period elapsed */
 static bool zoom_pcm_capture(struct pcm_substream *sub, struct pcm_urb *urb)
@@ -276,7 +282,7 @@ static bool zoom_pcm_capture(struct pcm_substream *sub, struct pcm_urb *urb)
 	struct snd_pcm_runtime *alsa_rt = sub->instance->runtime;
 	struct device *device = &urb->chip->dev->dev;
 	u8 *source;
-	unsigned int pcm_buffer_size, pcm_len;
+	unsigned int pcm_buffer_size, pcm_len, len;
 
 	WARN_ON(alsa_rt->format != SNDRV_PCM_FORMAT_S32_LE);
 
@@ -290,12 +296,20 @@ static bool zoom_pcm_capture(struct pcm_substream *sub, struct pcm_urb *urb)
 			 (unsigned int) sub->dma_off);
 
 		source = alsa_rt->dma_area + sub->dma_off;
-		memcpy_pcm_read(source, urb->buffer, 12);
+		memcpy_pcm_capture(source, urb->buffer, 12, 0, 0);
 	} else {
 		/* wrap around at end of ring buffer */
-		dev_info(device, "%s: (2) buffer_size %#x dma_offset %#x\n", __func__,
+		dev_dbg(device, "%s: (2) buffer_size %#x dma_offset %#x\n", __func__,
 			 (unsigned int) pcm_buffer_size,
 			 (unsigned int) sub->dma_off);
+		
+		len = pcm_buffer_size - sub->dma_off;
+		source = alsa_rt->dma_area + sub->dma_off;
+		memcpy_pcm_capture(source, urb->buffer, 12, 0, len);
+
+		source = alsa_rt->dma_area;
+		memcpy_pcm_capture(source, urb->buffer, 12, len, 0);
+
 	}
 	sub->dma_off += pcm_len;
 	if (sub->dma_off >= pcm_buffer_size)
@@ -330,7 +344,7 @@ static bool zoom_pcm_playback(struct pcm_substream *sub, struct pcm_urb *urb)
 			 (unsigned int) sub->dma_off);
 
 		source = alsa_rt->dma_area + sub->dma_off;
-		memcpy_pcm_write(urb->buffer, source, 2);
+		memcpy_pcm_playback(urb->buffer, source, 2);
 	} else {
 		/* wrap around at end of ring buffer */
 		dev_info(device, "%s: (2) buffer_size %#x dma_offset %#x\n", __func__,
@@ -369,16 +383,16 @@ static void zoom_pcm_in_urb_handler(struct urb *usb_urb)
 	}
 
 	sub = &rt->capture;
-
+#if 1
 	spin_lock_irqsave(&sub->lock, flags);
 	if (sub->active) {
 		do_period_elapsed = zoom_pcm_capture(sub, in_urb);
 	}
 	spin_unlock_irqrestore(&sub->lock, flags);
-
 	if (do_period_elapsed)
 		snd_pcm_period_elapsed(sub->instance);
 
+#endif
 	ret = usb_submit_urb(&in_urb->instance, GFP_ATOMIC);
 	if (ret < 0)
 		goto out_fail;
@@ -700,7 +714,7 @@ int zoom_pcm_init(struct zoom_chip *chip)
 		}
 	}
 
-	ret = snd_pcm_new(chip->card, "USB Audio", 0, 1, 0, &pcm);
+	ret = snd_pcm_new(chip->card, "USB Audio", 0, 1, 1, &pcm);
 	if (ret < 0) {
 		dev_err(&chip->dev->dev, "Cannot create pcm instance\n");
 		goto error;
@@ -711,6 +725,7 @@ int zoom_pcm_init(struct zoom_chip *chip)
 
 	strscpy(pcm->name, "USB Audio", sizeof(pcm->name));
 	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_PLAYBACK, &pcm_ops);
+	snd_pcm_set_ops(pcm, SNDRV_PCM_STREAM_CAPTURE, &pcm_ops);
 	snd_pcm_set_managed_buffer_all(pcm, SNDRV_DMA_TYPE_VMALLOC,
 				       NULL, 0, 0);
 
