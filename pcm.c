@@ -82,7 +82,7 @@ static const struct snd_pcm_hardware pcm_hw = {
 	.rate_min = 48000,
 	.rate_max = 48000,
 	.channels_min = 2,
-	.channels_max = 2,
+	.channels_max = 4,
 	.buffer_bytes_max = 1024 * 1024,
 	.period_bytes_min = PCM_PACKET_SIZE * 2,
 	.period_bytes_max = 512 * 1024,
@@ -103,7 +103,7 @@ static const struct snd_pcm_hardware pcm_hw_rec = {
 	.rates = SNDRV_PCM_RATE_48000,
 	.rate_min = 48000,
 	.rate_max = 48000,
-	.channels_min = 12,
+	.channels_min = 1,
 	.channels_max = 12,
 	.buffer_bytes_max = 1024 * 1024,
 	.period_bytes_min = PCM_PACKET_SIZE * 12,
@@ -288,7 +288,7 @@ static bool zoom_pcm_capture(struct pcm_substream *sub, struct pcm_urb *urb)
 
 	pcm_buffer_size = snd_pcm_lib_buffer_bytes(sub->instance);
 
-	pcm_len = 4 * 12 * 4; /* 4 Byte (32Bit) * 12 CH * 4 Frames */
+	pcm_len = 4 * alsa_rt->channels * 4; /* 4 Byte (32Bit) * CH * 4 Frames */
 
 	if (sub->dma_off + pcm_len <= pcm_buffer_size) {
 		dev_dbg(device, "%s: (1) buffer_size %#x dma_offset %#x\n", __func__,
@@ -296,7 +296,7 @@ static bool zoom_pcm_capture(struct pcm_substream *sub, struct pcm_urb *urb)
 			 (unsigned int) sub->dma_off);
 
 		source = alsa_rt->dma_area + sub->dma_off;
-		memcpy_pcm_capture(source, urb->buffer, 12, 0, 0);
+		memcpy_pcm_capture(source, urb->buffer, alsa_rt->channels, 0, 0);
 	} else {
 		/* wrap around at end of ring buffer */
 		dev_dbg(device, "%s: (2) buffer_size %#x dma_offset %#x\n", __func__,
@@ -305,10 +305,10 @@ static bool zoom_pcm_capture(struct pcm_substream *sub, struct pcm_urb *urb)
 		
 		len = pcm_buffer_size - sub->dma_off;
 		source = alsa_rt->dma_area + sub->dma_off;
-		memcpy_pcm_capture(source, urb->buffer, 12, 0, len);
+		memcpy_pcm_capture(source, urb->buffer, alsa_rt->channels, 0, len);
 
 		source = alsa_rt->dma_area;
-		memcpy_pcm_capture(source, urb->buffer, 12, len, 0);
+		memcpy_pcm_capture(source, urb->buffer, alsa_rt->channels, len, 0);
 
 	}
 	sub->dma_off += pcm_len;
@@ -336,7 +336,7 @@ static bool zoom_pcm_playback(struct pcm_substream *sub, struct pcm_urb *urb)
 
 	pcm_buffer_size = snd_pcm_lib_buffer_bytes(sub->instance);
 
-	pcm_len = 4 * 2 * 4; /* 4 Byte (32Bit) * 2 CH * 4 Frames */
+	pcm_len = 4 * alsa_rt->channels * 4; /* 4 Byte (32Bit) * 2 CH * 4 Frames */
 
 	if (sub->dma_off + pcm_len <= pcm_buffer_size) {
 		dev_dbg(device, "%s: (1) buffer_size %#x dma_offset %#x\n", __func__,
@@ -344,7 +344,7 @@ static bool zoom_pcm_playback(struct pcm_substream *sub, struct pcm_urb *urb)
 			 (unsigned int) sub->dma_off);
 
 		source = alsa_rt->dma_area + sub->dma_off;
-		memcpy_pcm_playback(urb->buffer, source, 2);
+		memcpy_pcm_playback(urb->buffer, source, alsa_rt->channels);
 	} else {
 		/* wrap around at end of ring buffer */
 		dev_info(device, "%s: (2) buffer_size %#x dma_offset %#x\n", __func__,
