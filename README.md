@@ -20,8 +20,13 @@ $ sudo dkms autoinstall
 
 # Update
 
-TBD
-
+```bash
+$ cd /usr/src/snd-usb-zoom-0.0.1
+$ sudo git pull
+$ sudo dkms remove snd-usb-zoom/0.0.1
+$ sudo dkms add snd-usb-zoom/0.0.1
+$ sudo dkms autoinstall
+```
 
 # Remove
 
