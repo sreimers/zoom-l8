@@ -1,16 +1,18 @@
-# Requirements - Arch Linux
+# Zoom LiveTrak L-8 Linux driver
+
+## Requirements - Arch Linux
 ```bash
 $ sudo pacman -S git make gcc linux-headers dkms
 ```
 
-# Requirements - Ubuntu
+## Requirements - Ubuntu
 
 ```bash
 $ sudo apt-get install build-essential dkms git
 ```
 
 
-# Installation
+## Installation
 
 ```bash
 $ sudo git clone https://github.com/sreimers/zoom-l8.git /usr/src/snd-usb-zoom-0.0.1
@@ -18,7 +20,7 @@ $ sudo dkms add snd-usb-zoom/0.0.1
 $ sudo dkms autoinstall
 ```
 
-# Update
+## Update
 
 ```bash
 $ cd /usr/src/snd-usb-zoom-0.0.1
@@ -28,16 +30,16 @@ $ sudo dkms add snd-usb-zoom/0.0.1
 $ sudo dkms autoinstall
 ```
 
-# Remove
+## Remove
 
 ```bash
 $ sudo dkms remove snd-usb-zoom/0.0.1
 ```
 
 
-# Notes
+## Notes
 
-## Input (12 CH)
+### Input (12 CH)
 
 - Master L
 - Master R
@@ -52,7 +54,7 @@ $ sudo dkms remove snd-usb-zoom/0.0.1
 - In8L 
 - In8R
 
-## Output (4 CH)
+### Output (4 CH)
 
 - Out1 (USB 1)
 - Out2 (USB 2)
@@ -60,7 +62,7 @@ $ sudo dkms remove snd-usb-zoom/0.0.1
 - Out4 (USB 4)
 
 
-## USB format:
+### USB format:
 
 - URB = 512 Byte
 - 1 CH = 4 Byte (32 Bit)
