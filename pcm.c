@@ -17,8 +17,8 @@
 #define IN_EP           0x82
 #define OUT_EP          0x01
 #define PCM_N_URBS      4
-#define PCM_PACKET_SIZE 512
-#define PCM_BUFFER_SIZE (2 * PCM_N_URBS * PCM_PACKET_SIZE)
+#define PCM_URB_SIZE 512
+#define PCM_PACKET_SIZE (4 * 4) /* 32 Bit x Frames/URB */
 
 struct pcm_urb {
 	struct zoom_chip *chip;
@@ -83,9 +83,9 @@ static const struct snd_pcm_hardware pcm_hw = {
 	.rate_max = 48000,
 	.channels_min = 2,
 	.channels_max = 2,
-	.buffer_bytes_max = PCM_BUFFER_SIZE,
-	.period_bytes_min = PCM_PACKET_SIZE,
-	.period_bytes_max = PCM_BUFFER_SIZE,
+	.buffer_bytes_max = 1024 * 1024,
+	.period_bytes_min = PCM_PACKET_SIZE * 2,
+	.period_bytes_max = 512 * 1024,
 	.periods_min = 2,
 	.periods_max = 1024
 };
@@ -105,9 +105,9 @@ static const struct snd_pcm_hardware pcm_hw_rec = {
 	.rate_max = 48000,
 	.channels_min = 12,
 	.channels_max = 12,
-	.buffer_bytes_max = PCM_BUFFER_SIZE,
-	.period_bytes_min = PCM_PACKET_SIZE,
-	.period_bytes_max = PCM_BUFFER_SIZE,
+	.buffer_bytes_max = 1024 * 1024,
+	.period_bytes_min = PCM_PACKET_SIZE * 12,
+	.period_bytes_max = 512 * 1024,
 	.periods_min = 2,
 	.periods_max = 1024
 };
@@ -201,7 +201,7 @@ static int zoom_pcm_stream_start(struct pcm_runtime *rt)
 		/* submit our out urbs zero init */
 		rt->stream_state = STREAM_STARTING;
 		for (i = 0; i < PCM_N_URBS; i++) {
-			memset(rt->out_urbs[i].buffer, 0, PCM_PACKET_SIZE);
+			memset(rt->out_urbs[i].buffer, 0, PCM_URB_SIZE);
 			usb_anchor_urb(&rt->out_urbs[i].instance,
 				       &rt->out_urbs[i].submitted);
 			ret = usb_submit_urb(&rt->out_urbs[i].instance,
@@ -242,7 +242,7 @@ static void memcpy_pcm_playback(u8 *dest, u8 *src, u8 ch)
 {
 	unsigned int i, c, o = 0;
 
-	for (i = 0; i < (PCM_PACKET_SIZE/4); i++) {
+	for (i = 0; i < (PCM_URB_SIZE/4); i++) {
 		if (i % 32) {
 			((u32 *)dest)[i] = 0; /* Padding */
 			continue;
@@ -258,7 +258,7 @@ static void memcpy_pcm_capture(u8 *dest, u8 *src, u8 ch, unsigned int skip, unsi
 {
 	unsigned int i, c, o = 0;
 
-	for (i = 0; i < (PCM_PACKET_SIZE/4); i++) {
+	for (i = 0; i < (PCM_URB_SIZE/4); i++) {
 		if (i % 32)
 			continue;
 
@@ -435,7 +435,7 @@ static void zoom_pcm_out_urb_handler(struct urb *usb_urb)
 		do_period_elapsed = zoom_pcm_playback(sub, out_urb);
 	}
 	else
-		memset(out_urb->buffer, 0, PCM_PACKET_SIZE);
+		memset(out_urb->buffer, 0, PCM_URB_SIZE);
 
 	spin_unlock_irqrestore(&sub->lock, flags);
 
@@ -602,13 +602,13 @@ static int zoom_pcm_init_urb_out(struct pcm_urb *urb,
 	urb->chip = chip;
 	usb_init_urb(&urb->instance);
 
-	urb->buffer = kzalloc(PCM_PACKET_SIZE, GFP_KERNEL);
+	urb->buffer = kzalloc(PCM_URB_SIZE, GFP_KERNEL);
 	if (!urb->buffer)
 		return -ENOMEM;
 
 	usb_fill_bulk_urb(&urb->instance, chip->dev,
 			  usb_sndbulkpipe(chip->dev, ep), (void *)urb->buffer,
-			  PCM_PACKET_SIZE, handler, urb);
+			  PCM_URB_SIZE, handler, urb);
 	if (usb_urb_ep_type_check(&urb->instance))
 		return -EINVAL;
 	init_usb_anchor(&urb->submitted);
@@ -624,13 +624,13 @@ static int zoom_pcm_init_urb_in(struct pcm_urb *urb,
 	urb->chip = chip;
 	usb_init_urb(&urb->instance);
 
-	urb->buffer = kzalloc(PCM_PACKET_SIZE, GFP_KERNEL);
+	urb->buffer = kzalloc(PCM_URB_SIZE, GFP_KERNEL);
 	if (!urb->buffer)
 		return -ENOMEM;
 
 	usb_fill_bulk_urb(&urb->instance, chip->dev,
 			  usb_rcvbulkpipe(chip->dev, ep), (void *)urb->buffer,
-			  PCM_PACKET_SIZE, handler, urb);
+			  PCM_URB_SIZE, handler, urb);
 	if (usb_urb_ep_type_check(&urb->instance))
 		return -EINVAL;
 	init_usb_anchor(&urb->submitted);
