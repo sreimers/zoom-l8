@@ -237,40 +237,32 @@ static int zoom_pcm_stream_start(struct pcm_runtime *rt)
 	return ret;
 }
 
-/* The hardware wants 4x32ch (512 byte) values */
-static void memcpy_pcm_playback(u8 *dest, u8 *src, u8 ch)
+
+static void memcpy_pcm(u8 *dest, u8 *src, u8 ch_sz,
+		unsigned int skip, unsigned int len, bool padding)
 {
 	unsigned int i, c, o = 0;
 
-	for (i = 0; i < (PCM_URB_SIZE/4); i++) {
-		if (i % 32) {
-			((u32 *)dest)[i] = 0; /* Padding */
+	for (i = 0; i < PCM_URB_SIZE; i++) {
+		if (i % 128) {
+			if (padding)
+				dest[i] = 0; /* Padding */
 			continue;
 		}
 
-		for (c = 0; c < ch; c++) {
-			((u32 *)dest)[i++] = ((u32 *)src)[o++];
-		}
-	}
-}
-
-static void memcpy_pcm_capture(u8 *dest, u8 *src, u8 ch, unsigned int skip, unsigned int l)
-{
-	unsigned int i, c, o = 0;
-
-	for (i = 0; i < (PCM_URB_SIZE/4); i++) {
-		if (i % 32)
-			continue;
-
-		for (c = 0; c < ch; c++) {
-			if (skip && i < skip/4) {
+		for (c = 0; c < ch_sz; c++) {
+			if (skip && skip--) {
 				i++;
 				continue;
 			}
-			if (l && o >= l/4)
+
+			if (len && o >= len)
 				return;
 
-			((u32 *)dest)[o++] = ((u32 *)src)[i++];
+			if (padding)
+				dest[i++] = src[o++];
+			else
+				dest[o++] = src[i++];
 		}
 	}
 }
@@ -281,22 +273,23 @@ static bool zoom_pcm_capture(struct pcm_substream *sub, struct pcm_urb *urb)
 {
 	struct snd_pcm_runtime *alsa_rt = sub->instance->runtime;
 	struct device *device = &urb->chip->dev->dev;
-	u8 *source;
+	u8 *dest;
+	u8 ch_sz = alsa_rt->channels * 4; /* 32Bit */
 	unsigned int pcm_buffer_size, pcm_len, len;
 
 	WARN_ON(alsa_rt->format != SNDRV_PCM_FORMAT_S32_LE);
 
 	pcm_buffer_size = snd_pcm_lib_buffer_bytes(sub->instance);
 
-	pcm_len = 4 * alsa_rt->channels * 4; /* 4 Byte (32Bit) * CH * 4 Frames */
+	pcm_len = ch_sz * 4; /* Channel size * 4 Frames */
 
 	if (sub->dma_off + pcm_len <= pcm_buffer_size) {
 		dev_dbg(device, "%s: (1) buffer_size %#x dma_offset %#x\n", __func__,
 			 (unsigned int) pcm_buffer_size,
 			 (unsigned int) sub->dma_off);
 
-		source = alsa_rt->dma_area + sub->dma_off;
-		memcpy_pcm_capture(source, urb->buffer, alsa_rt->channels, 0, 0);
+		dest = alsa_rt->dma_area + sub->dma_off;
+		memcpy_pcm(dest, urb->buffer, ch_sz, 0, 0, false);
 	} else {
 		/* wrap around at end of ring buffer */
 		dev_dbg(device, "%s: (2) buffer_size %#x dma_offset %#x\n", __func__,
@@ -304,11 +297,11 @@ static bool zoom_pcm_capture(struct pcm_substream *sub, struct pcm_urb *urb)
 			 (unsigned int) sub->dma_off);
 		
 		len = pcm_buffer_size - sub->dma_off;
-		source = alsa_rt->dma_area + sub->dma_off;
-		memcpy_pcm_capture(source, urb->buffer, alsa_rt->channels, 0, len);
+		dest = alsa_rt->dma_area + sub->dma_off;
+		memcpy_pcm(dest, urb->buffer, ch_sz, 0, len, false);
 
-		source = alsa_rt->dma_area;
-		memcpy_pcm_capture(source, urb->buffer, alsa_rt->channels, len, 0);
+		dest = alsa_rt->dma_area;
+		memcpy_pcm(dest, urb->buffer, ch_sz, len, pcm_len - len, false);
 
 	}
 	sub->dma_off += pcm_len;
@@ -330,13 +323,14 @@ static bool zoom_pcm_playback(struct pcm_substream *sub, struct pcm_urb *urb)
 	struct snd_pcm_runtime *alsa_rt = sub->instance->runtime;
 	struct device *device = &urb->chip->dev->dev;
 	u8 *source;
-	unsigned int pcm_buffer_size, pcm_len;
+	u8 ch_sz = alsa_rt->channels * 4; /* 32Bit */
+	unsigned int pcm_buffer_size, pcm_len, len;
 
 	WARN_ON(alsa_rt->format != SNDRV_PCM_FORMAT_S32_LE);
 
 	pcm_buffer_size = snd_pcm_lib_buffer_bytes(sub->instance);
 
-	pcm_len = 4 * alsa_rt->channels * 4; /* 4 Byte (32Bit) * 2 CH * 4 Frames */
+	pcm_len = ch_sz * 4; /* Channel size * 4 Frames */
 
 	if (sub->dma_off + pcm_len <= pcm_buffer_size) {
 		dev_dbg(device, "%s: (1) buffer_size %#x dma_offset %#x\n", __func__,
@@ -344,12 +338,19 @@ static bool zoom_pcm_playback(struct pcm_substream *sub, struct pcm_urb *urb)
 			 (unsigned int) sub->dma_off);
 
 		source = alsa_rt->dma_area + sub->dma_off;
-		memcpy_pcm_playback(urb->buffer, source, alsa_rt->channels);
+		memcpy_pcm(urb->buffer, source, ch_sz, 0, 0, true);
 	} else {
 		/* wrap around at end of ring buffer */
 		dev_info(device, "%s: (2) buffer_size %#x dma_offset %#x\n", __func__,
 			 (unsigned int) pcm_buffer_size,
 			 (unsigned int) sub->dma_off);
+
+		len = pcm_buffer_size - sub->dma_off;
+		source = alsa_rt->dma_area + sub->dma_off;
+		memcpy_pcm(urb->buffer, source, ch_sz, 0, len, true);
+
+		source = alsa_rt->dma_area;
+		memcpy_pcm(urb->buffer, source, ch_sz, len, pcm_len - len, true);
 	}
 	sub->dma_off += pcm_len;
 	if (sub->dma_off >= pcm_buffer_size)
