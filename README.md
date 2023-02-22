@@ -39,6 +39,8 @@ $ sudo dkms remove snd-usb-zoom/0.0.1
 
 ## Notes
 
+This driver works/detects only the Zoom-L8 in 48kHz mode (`System > Sample Rate`).
+
 ### Input (12 CH)
 
 - Master L
