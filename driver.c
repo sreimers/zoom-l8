@@ -170,6 +170,12 @@ static const struct usb_device_id device_table[] = {
 			.device_name = "ZOOM L-8"
 		}
 	},
+	{
+		USB_DEVICE_INTERFACE_NUMBER(0x1686, 0x0515, 2),
+		.driver_info = (unsigned long)&(const struct zoom_vendor_quirk) {
+			.device_name = "ZOOM L-8"
+		}
+	},
 	{}
 };
 
